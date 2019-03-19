@@ -1,14 +1,14 @@
 import 'graphql-codegen-testing';
 import gql from 'graphql-tag';
-import { plugin, addToSchema } from '../src/index';
-import { parse, GraphQLSchema, buildClientSchema, buildSchema, extendSchema } from 'graphql';
+import { plugin } from '../src/index';
+import { parse, GraphQLSchema, buildClientSchema, buildSchema } from 'graphql';
 import { Types } from 'graphql-codegen-plugin-helpers';
 import { plugin as tsPlugin } from '../../typescript/src/index';
-import { plugin as tsDocumentsPlugin } from '../../typescript-operations/src/index';
+import { plugin as tsOperationsPlugin } from '../../typescript-operations/src/index';
 import { validateTs } from '../../typescript/tests/validate';
 import { readFileSync } from 'fs';
 
-describe('Apollo Angular', () => {
+describe('AWS Amplify Angular', () => {
   const schema = buildClientSchema(JSON.parse(readFileSync('../../../dev-test/githunt/schema.json').toString()));
   const basicDoc = parse(/* GraphQL */ `
     query test {
@@ -33,7 +33,7 @@ describe('Apollo Angular', () => {
     config: any
   ) => {
     const tsOutput = await tsPlugin(testSchema, documents, config, { outputFile: '' });
-    const tsDocumentsOutput = await tsDocumentsPlugin(testSchema, documents, config, { outputFile: '' });
+    const tsDocumentsOutput = await tsOperationsPlugin(testSchema, documents, config, { outputFile: '' });
     const merged = [tsOutput, tsDocumentsOutput, output].join('\n');
     validateTs(merged, undefined, false);
   };
@@ -68,6 +68,7 @@ describe('Apollo Angular', () => {
 
       expect(content).toContain(`import { DocumentNode } from 'graphql';`);
       expect(content).not.toBeSimilarStringTo(`import gql from 'graphql-tag';`);
+
       await validateTypeScript(content, schema, docs, {});
     });
 
@@ -97,76 +98,12 @@ describe('Apollo Angular', () => {
         }
       );
 
-      expect(content).toBeSimilarStringTo(`import Apollo from 'apollo-angular';`);
+      expect(content).toBeSimilarStringTo(`import API, { graphqlOperation } from '@aws-amplify/api';`);
       expect(content).toBeSimilarStringTo(`import { Injectable } from '@angular/core';`);
+      expect(content).toBeSimilarStringTo(`import { GraphQLResult } from "@aws-amplify/api/lib/types";`);
+      expect(content).toBeSimilarStringTo(`import * as Observable from 'zen-observable';`);
+
       await validateTypeScript(content, schema, docs, {});
-    });
-
-    it('Should import NgModules and remove NgModule directive', async () => {
-      const modifiedSchema = extendSchema(schema, addToSchema);
-      expect(modifiedSchema.getDirective('NgModule').name).toBe('NgModule');
-      const modulePath = '../my/lazy-module';
-      const moduleName = 'LazyModule';
-
-      const myFeed = gql(`
-        query MyFeed {
-          feed @client @NgModule(module: "${modulePath}#${moduleName}") {
-            id
-          }
-        }
-      `);
-      const docs = [{ filePath: '', content: myFeed }];
-      const content = await plugin(
-        modifiedSchema,
-        docs,
-        {},
-        {
-          outputFile: 'graphql.ts'
-        }
-      );
-
-      expect(content).toMatch(`import { ${moduleName} } from '${modulePath}'`);
-      expect(content).toBeSimilarStringTo(`
-        @Injectable({
-          providedIn: ${moduleName}
-        })
-        export class MyFeedGQL
-      `);
-      expect(content).toBeSimilarStringTo(`document = MyFeedDocument;`);
-      expect(content).not.toContain('@NgModule');
-      expect(content).toContain('@client');
-      validateTypeScript(content, modifiedSchema, docs, {});
-    });
-
-    it('Should import namedClient and remove namedClient directive', async () => {
-      const modifiedSchema = extendSchema(schema, addToSchema);
-      expect(modifiedSchema.getDirective('namedClient').name).toBe('namedClient');
-
-      const myFeed = gql(`
-        query MyFeed {
-          feed @namedClient(name: "custom") {
-            id
-          }
-        }
-      `);
-
-      const docs = [{ filePath: '', content: myFeed }];
-      const content = await plugin(
-        modifiedSchema,
-        docs,
-        {},
-        {
-          outputFile: 'graphql.ts'
-        }
-      );
-
-      expect(content).toBeSimilarStringTo(`document = MyFeedDocument;`);
-
-      expect(content).toBeSimilarStringTo(`
-        client = 'custom';
-      `);
-      expect(content).not.toContain('@namedClient');
-      validateTypeScript(content, modifiedSchema, docs, {});
     });
   });
 
@@ -192,11 +129,29 @@ describe('Apollo Angular', () => {
       );
 
       expect(content).toBeSimilarStringTo(`
+        export const TestDocument = gql\`
+          query test {
+            f
+          }
+        \`;
+      `);
+
+      expect(content).toBeSimilarStringTo(`
+        async function TestApi(): Promise<TestQuery> {
+          const response = (await API.graphql(graphqlOperation(TestDocument))) as any;
+          return <TestQuery>response.data.f;
+        }
+      `);
+
+      expect(content).toBeSimilarStringTo(`
         @Injectable({
           providedIn: 'root'
         })
-        export class TestGQL extends Apollo.Query
+        export class APIService {
+          Test = TestApi;
+        }
       `);
+
       validateTypeScript(content, rootSchema, docs, {});
     });
 
@@ -219,65 +174,19 @@ describe('Apollo Angular', () => {
         }
       );
 
-      expect(content).toBeSimilarStringTo(`document = MyFeedDocument;`);
+      expect(content).toBeSimilarStringTo(`
+        export const MyFeedDocument = gql\`
+          query MyFeed {
+            feed @client {
+              id
+            }
+          }
+        \`;
+      `);
+
+      expect(content).toBeSimilarStringTo(`graphqlOperation(MyFeedDocument)`);
 
       validateTypeScript(content, schema, docs, {});
-    });
-  });
-
-  describe('configuration', () => {
-    it('should be allow to define namedClient and NgModule in config', async () => {
-      const modifiedSchema = extendSchema(schema, addToSchema);
-      const myFeed = gql(`
-        query MyFeed {
-          feed {
-            id
-          }
-        }
-      `);
-      const myExtraFeed = gql(`
-        query MyExtraFeed {
-          feed @NgModule(module: "./extra#ExtraModule") @namedClient(name: "extra") {
-            id
-          }
-        }
-      `);
-      const docs = [{ filePath: '', content: myFeed }, { filePath: 'a.ts', content: myExtraFeed }];
-      const content = await plugin(
-        modifiedSchema,
-        docs,
-        {
-          ngModule: './path/to/file#AppModule',
-          namedClient: 'custom'
-        },
-        {
-          outputFile: 'graphql.ts'
-        }
-      );
-
-      // NgModule
-      expect(content).toMatch(`import { AppModule } from './path/to/file'`);
-      expect(content).toBeSimilarStringTo(`
-        @Injectable({
-          providedIn: AppModule
-        })
-        export class MyFeedGQL
-      `);
-      expect(content).toMatch(`import { ExtraModule } from './extra'`);
-      expect(content).toBeSimilarStringTo(`
-        @Injectable({
-          providedIn: ExtraModule
-        })
-        export class MyExtraFeed
-      `);
-      expect(content).not.toContain('@NgModule');
-
-      // NamedClient
-      expect(content).toBeSimilarStringTo(`client = 'custom';`);
-      expect(content).toBeSimilarStringTo(`client = 'extra';`);
-      expect(content).not.toContain('@namedClient');
-
-      validateTypeScript(content, modifiedSchema, docs, {});
     });
   });
 
